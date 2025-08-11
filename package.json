@@ -12,6 +12,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "lil-gui": "^0.20.0",
     "three": "^0.179.1",
     "vite": "^7.1.1"
   }
