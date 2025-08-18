@@ -1,8 +1,10 @@
 import * as THREE from "three";
 import * as dat from "lil-gui";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+
 
 const rgbeLoader = new RGBELoader();
 
@@ -16,18 +18,15 @@ let model;
 gltfLoader.load("/static/models/henry.gltf", (gltf) => {
   model = gltf.scene;
 
-  // Scale and position the model if needed
   model.scale.set(0.5, 0.5, 0.5);
   model.position.set(0, 0, 0);
 
   scene.add(model);
 
-  // Optional: animate it like you did with the cube
   function animateModel() {
     model.rotation.y += 0.01;
   }
 
-  // Hook it into your animate loop
   const oldAnimate = animate;
   animate = function () {
     oldAnimate();
