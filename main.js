@@ -1,38 +1,8 @@
 import * as THREE from "three";
-import * as dat from "lil-gui";
 
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-
-
-const rgbeLoader = new RGBELoader();
-
-rgbeLoader.load("/static/textures/bg.hdr", (bg) => {
-  bg.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = bg;
-  scene.environment = bg;
-});
-const gltfLoader = new GLTFLoader();
-let model;
-gltfLoader.load("/static/models/henry.gltf", (gltf) => {
-  model = gltf.scene;
-
-  model.scale.set(0.5, 0.5, 0.5);
-  model.position.set(0, 0, 0);
-
-  scene.add(model);
-
-  function animateModel() {
-    model.rotation.y += 0.01;
-  }
-
-  const oldAnimate = animate;
-  animate = function () {
-    oldAnimate();
-    animateModel();
-  };
-});
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(
@@ -44,194 +14,790 @@ const camera = new THREE.PerspectiveCamera(
 
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setAnimationLoop(animate);
 document.body.appendChild(renderer.domElement);
 
-const textureLoader = new THREE.TextureLoader();
+// --- Enable Shadows ---
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
+// ----------------------
 
-const sampleTexture = textureLoader.load("/static/textures/image.jpg");
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(animate);
 
-sampleTexture.colorSpace = THREE.SRGBColorSpace;
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const selectableMeshes = [];
+const placedClickable = [];
+const powerClickable = [];
 
-sampleTexture.magFilter = THREE.NearestFilter;
+const rgbeLoader = new RGBELoader();
+rgbeLoader.load("/static/textures/bg.hdr", (bg) => {
+  bg.mapping = THREE.EquirectangularReflectionMapping;
+  scene.background = bg;
+  scene.environment = bg;
+});
+const gltfLoader = new GLTFLoader();
 
-const geometry = new THREE.BoxGeometry(1, 1, 1);
-const material = new THREE.MeshBasicMaterial({ map: sampleTexture });
-const mesh = new THREE.Mesh(geometry, material);
-//scene.add(mesh);
 const controls = new OrbitControls(camera, renderer.domElement);
-camera.position.z = 4;
+camera.position.set(0, 1.6, 7);
+controls.target.set(0, 1.0, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.maxPolarAngle = Math.PI * 0.49;
+controls.minDistance = 1.2;
+controls.maxDistance = 8;
+controls.update();
 
-const hotspotData = [
-  {
-    title: "Panzer IV",
-    desc: "The Panzer IV was a versatile medium tank, widely deployed on the Eastern Front. It balanced mobility, armor, and firepower.",
-    img: "https://upload.wikimedia.org/wikipedia/commons/e/e1/Panzermuseum_Munster_2010_0128_b.jpg",
-  },
-  {
-    title: "Panther Tank",
-    desc: "The Panther was designed to counter Soviet T-34s, featuring sloped armor and a powerful 75mm gun, making it deadly at range.",
-    img: "https://upload.wikimedia.org/wikipedia/commons/6/61/Bundesarchiv_Bild_183-H26258%2C_Panzer_V_%22Panther%22.jpg  ",
-  },
-  {
-    title: "Tiger I",
-    desc: "The Tiger I was a heavy tank with thick armor and an 88mm gun, feared by Soviet forces but expensive and slow to produce.",
-    img: "https://upload.wikimedia.org/wikipedia/commons/b/ba/Bundesarchiv_Bild_101I-299-1805-16%2C_Nordfrankreich%2C_Panzer_VI_%28Tiger_I%29.2.jpg",
-  },
-  {
-    title: "Stug III Assault Gun",
-    desc: "The StuG III was a cost-effective tank destroyer and infantry support vehicle, highly effective in defensive operations.",
-    img: "https://upload.wikimedia.org/wikipedia/commons/1/18/SNC15697_%285853637442%29_b.jpg",
-  },
-];
-
-function createHotspot(position, name, number) {
-  const geometry = new THREE.SphereGeometry(0.2, 16, 16);
-  const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-  const hotspot = new THREE.Mesh(geometry, material);
-  hotspot.position.copy(position);
-  hotspot.name = name;
-  hotspot.index = hotspotObjects.length;
-  scene.add(hotspot);
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  canvas.width = 128;
-  canvas.height = 128;
-
-  ctx.fillStyle = "white";
-  ctx.font = "bold 64px Arial";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(number, canvas.width / 2, canvas.height / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const spriteMaterial = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-  });
-  const sprite = new THREE.Sprite(spriteMaterial);
-
-  sprite.scale.set(1, 1, 1);
-  sprite.position.set(0, 0.5, 0);
-  hotspot.add(sprite);
-
-  return hotspot;
-}
-
-function getRandomPosition(range = 50) {
-  const x = (Math.random() - 0.5) * 2 * range;
-  const y = Math.random() * range * 0.5 + 1;
-  const z = (Math.random() - 0.5) * 2 * range;
-  return new THREE.Vector3(x, y, z);
-}
-
-const hotspotObjects = [];
-for (let i = 0; i < hotspotData.length; i++) {
-  const pos = getRandomPosition(20);
-  hotspotObjects.push(createHotspot(pos, `spot${i + 1}`, `${i + 1}`, i));
-}
-
-let targetPosition = camera.position.clone();
-let currentIndex = 0;
-
-function getOffsetPosition(hotspot, offset = 2) {
-  const pos = hotspot.position.clone();
-  pos.x -= offset;
-
-  return pos;
-}
-
-const listener = new THREE.AudioListener();
-camera.add(listener);
-
-const audioLoader = new THREE.AudioLoader();
-const moveSound = new THREE.Audio(listener);
-
-audioLoader.load("/static/sounds/swoosh.mp3", (buffer) => {
-  moveSound.setBuffer(buffer);
-  moveSound.setLoop(false); 
-  moveSound.setVolume(0.5); 
+const ROOM_W = 20;
+const ROOM_H = 6;
+const ROOM_D = 20;
+const roomGeo = new THREE.BoxGeometry(ROOM_W, ROOM_H, ROOM_D);
+const roomMat = new THREE.MeshStandardMaterial({
+  color: 0x3a2f2a,
+  roughness: 1.0,
+  metalness: 0.0,
+  side: THREE.BackSide,
 });
+const roomCube = new THREE.Mesh(roomGeo, roomMat);
+roomCube.position.set(0, ROOM_H / 2, 0);
+roomCube.receiveShadow = true; // Room receives shadows
+scene.add(roomCube);
 
-const ambientSound = new THREE.Audio(listener);
-audioLoader.load("/static/sounds/ambient.mp3", (buffer) => {
-  ambientSound.setBuffer(buffer);
-  ambientSound.setLoop(true);
-  ambientSound.setVolume(0.3);
-  ambientSound.play();
+const BOUND_MARGIN = 0.6;
+const bounds = {
+  minX: -ROOM_W / 2 + BOUND_MARGIN,
+  maxX: ROOM_W / 2 - BOUND_MARGIN,
+  minY: 0.3,
+  maxY: ROOM_H - 0.8,
+  minZ: -ROOM_D / 2 + BOUND_MARGIN,
+  maxZ: ROOM_D / 2 - BOUND_MARGIN,
+};
+
+// --- Improved Lighting ---
+scene.add(new THREE.AmbientLight(0xffe7d6, 0.7)); // Slightly brighter ambient
+const hemi = new THREE.HemisphereLight(0xfff0e0, 0x20150f, 0.4); // Slightly brighter hemisphere
+scene.add(hemi);
+
+// Directional light (simulating sun/window light)
+const dirLight = new THREE.DirectionalLight(0xfff1e5, 0.65); // Brighter
+dirLight.position.set(5, 7, 3); // Positioned to cast shadows from a side
+dirLight.castShadow = true; // This light casts shadows
+dirLight.shadow.mapSize.width = 1024; // Shadow quality
+dirLight.shadow.mapSize.height = 1024;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 15;
+dirLight.shadow.camera.left = -10;
+dirLight.shadow.camera.right = 10;
+dirLight.shadow.camera.top = 10;
+dirLight.shadow.camera.bottom = -10;
+scene.add(dirLight);
+
+// Spotlights for warmth and focus
+const spotLight1 = new THREE.SpotLight(0xffaa66, 0.8); // Warm yellow light
+spotLight1.position.set(-2, 4, 3);
+spotLight1.angle = Math.PI / 8;
+spotLight1.penumbra = 0.5; // Soft edge
+spotLight1.decay = 1;
+spotLight1.distance = 10;
+spotLight1.castShadow = true;
+scene.add(spotLight1);
+spotLight1.target.position.set(0, 1.5, 0); // Point towards the center
+scene.add(spotLight1.target);
+
+const spotLight2 = new THREE.SpotLight(0xffaa66, 0.7);
+spotLight2.position.set(3, 4, -4);
+spotLight2.angle = Math.PI / 9;
+spotLight2.penumbra = 0.6;
+spotLight2.decay = 1;
+spotLight2.distance = 12;
+spotLight2.castShadow = true;
+scene.add(spotLight2);
+spotLight2.target.position.set(1, 1.0, -1); // Point towards the cozy corner
+scene.add(spotLight2.target);
+
+// Add a point light for a softer, more ambient glow in a corner
+const pointLight = new THREE.PointLight(0xffe0b3, 0.5, 5); // Warm, soft light
+pointLight.position.set(5, 2, 5);
+pointLight.castShadow = true;
+scene.add(pointLight);
+// --------------------------
+
+const cabinetSize = new THREE.Vector3(1.6, 1.8, 0.8);
+const cabinetGeo = new THREE.BoxGeometry(
+  cabinetSize.x,
+  cabinetSize.y,
+  cabinetSize.z
+);
+const cabinetMat = new THREE.MeshBasicMaterial({
+  color: 0x8aa1b1,
+  wireframe: true,
+  transparent: true,
+  opacity: 0.5,
 });
+const cabinet = new THREE.Mesh(cabinetGeo, cabinetMat);
+cabinet.position.set(-ROOM_W / 2 + 5, 0.9, -1.0);
+cabinet.castShadow = true; // Cabinet casts shadows
+cabinet.receiveShadow = true; // Cabinet receives shadows
+scene.add(cabinet);
 
-document.getElementById("left").addEventListener("click", () => {
-  controls.enabled = false;
-  currentIndex =
-    (currentIndex - 1 + hotspotObjects.length) % hotspotObjects.length;
-  console.log("Current Index (Left):", currentIndex);
-  targetPosition.copy(getOffsetPosition(hotspotObjects[currentIndex]));
+const powerBtnGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.02, 32);
+const powerBtnMat = new THREE.MeshBasicMaterial({ color: 0x00ff7f });
+const powerButton = new THREE.Mesh(powerBtnGeo, powerBtnMat);
+powerButton.rotation.x = Math.PI / 2;
+powerButton.position.set(cabinetSize.x / 2 + 0.01, cabinetSize.y / 2, 0.3);
+powerButton.userData.type = "power";
+powerButton.castShadow = true;
+cabinet.add(powerButton);
+powerClickable.push(powerButton);
 
-  if (moveSound.isPlaying) moveSound.stop();
-  moveSound.play();
-});
+const moveState = {
+  forward: false,
+  back: false,
+  left: false,
+  right: false,
+  sprint: false,
+};
+function onKeyDown(e) {
+  switch (e.code) {
+    case "KeyW":
+    case "ArrowUp":
+      moveState.forward = true;
+      e.preventDefault();
+      break;
+    case "KeyS":
+    case "ArrowDown":
+      moveState.back = true;
+      e.preventDefault();
+      break;
+    case "KeyA":
+    case "ArrowLeft":
+      moveState.left = true;
+      e.preventDefault();
+      break;
+    case "KeyD":
+    case "ArrowRight":
+      moveState.right = true;
+      e.preventDefault();
+      break;
+    case "ShiftLeft":
+    case "ShiftRight":
+      moveState.sprint = true;
+      break;
+  }
+}
+function onKeyUp(e) {
+  switch (e.code) {
+    case "KeyW":
+    case "ArrowUp":
+      moveState.forward = false;
+      break;
+    case "KeyS":
+    case "ArrowDown":
+      moveState.back = false;
+      break;
+    case "KeyA":
+    case "ArrowLeft":
+      moveState.left = false;
+      break;
+    case "KeyD":
+    case "ArrowRight":
+      moveState.right = false;
+      break;
+    case "ShiftLeft":
+    case "ShiftRight":
+      moveState.sprint = false;
+      break;
+  }
+}
+window.addEventListener("keydown", onKeyDown);
+window.addEventListener("keyup", onKeyUp);
 
-document.getElementById("right").addEventListener("click", () => {
-  controls.enabled = false;
-  currentIndex = (currentIndex + 1) % hotspotObjects.length;
-  console.log("Current Index (Right):", currentIndex);
-  targetPosition.copy(getOffsetPosition(hotspotObjects[currentIndex]));
-  if (moveSound.isPlaying) moveSound.stop();
-  moveSound.play();
-});
+const upVector = new THREE.Vector3(0, 1, 0);
+const tmpForward = new THREE.Vector3();
+const tmpRight = new THREE.Vector3();
 
 function animate() {
-  mesh.rotation.x += 0.01;
-  mesh.rotation.y += 0.01;
+  const nowDelta = clock.getDelta ? clock.getDelta() : 0.016;
+  const delta = nowDelta;
+  let speed = moveState.sprint ? 6 : 3;
+  let moved = false;
+  if (
+    moveState.forward ||
+    moveState.back ||
+    moveState.left ||
+    moveState.right
+  ) {
+    tmpForward.copy(camera.getWorldDirection(tmpForward));
+    tmpForward.y = 0;
+    tmpForward.normalize();
+    tmpRight.copy(tmpForward).cross(upVector).normalize();
 
-  if (!controls.enabled) {
-    camera.position.lerp(targetPosition, 0.05);
+    const dir = new THREE.Vector3();
+    if (moveState.forward) dir.add(tmpForward);
+    if (moveState.back) dir.sub(tmpForward);
+    if (moveState.right) dir.add(tmpRight);
+    if (moveState.left) dir.sub(tmpRight);
+    if (dir.lengthSq() > 0) {
+      dir.normalize().multiplyScalar(speed * delta);
+      camera.position.add(dir);
+      controls.target.add(dir);
 
-    model.position.lerp(targetPosition, 0.5);
-
-    if (camera.position.distanceTo(targetPosition) < 0.01) {
-      controls.enabled = true;
+      camera.position.x = Math.max(
+        bounds.minX,
+        Math.min(bounds.maxX, camera.position.x)
+      );
+      camera.position.y = Math.max(
+        bounds.minY,
+        Math.min(bounds.maxY, camera.position.y)
+      );
+      camera.position.z = Math.max(
+        bounds.minZ,
+        Math.min(bounds.maxZ, camera.position.z)
+      );
+      controls.target.x = Math.max(
+        bounds.minX,
+        Math.min(bounds.maxX, controls.target.x)
+      );
+      controls.target.y = Math.max(
+        bounds.minY,
+        Math.min(bounds.maxY, controls.target.y)
+      );
+      controls.target.z = Math.max(
+        bounds.minZ,
+        Math.min(bounds.maxZ, controls.target.z)
+      );
+      moved = true;
     }
   }
 
-  controls.update();
+  if (moved) controls.update();
+  else controls.update();
   renderer.render(scene, camera);
 }
 
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
+const PARTS = {
+  cpu: [
+    { id: "cpu1", name: "Ryzen 5 5600", socket: "AM4", tdp: 65, brand: "AMD" },
+    {
+      id: "cpu2",
+      name: "Core i5-12400F",
+      socket: "LGA1700",
+      tdp: 65,
+      brand: "Intel",
+    },
+    {
+      id: "cpu3",
+      name: "Ryzen 7 5800X",
+      socket: "AM4",
+      tdp: 105,
+      brand: "AMD",
+    },
+  ],
+  gpu: [
+    { id: "gpu1", name: "RTX 3060", tdp: 170, pcieGen: 4 },
+    { id: "gpu2", name: "RX 6600", tdp: 132, pcieGen: 4 },
+    { id: "gpu3", name: "GTX 1660 Super", tdp: 125, pcieGen: 3 },
+  ],
+  ram: [
+    { id: "ram1", name: "16GB DDR4 3200", type: "DDR4", speed: 3200 },
+    { id: "ram2", name: "16GB DDR5 5600", type: "DDR5", speed: 5600 },
+    { id: "ram3", name: "32GB DDR4 3600", type: "DDR4", speed: 3600 },
+  ],
+  motherboard: [
+    {
+      id: "mb1",
+      name: "B550 (AM4)",
+      socket: "AM4",
+      pcieGen: 4,
+      supportedRamTypes: ["DDR4"],
+      maxRamSpeed: 4400,
+      sataPorts: 4,
+      nvmeSlots: 2,
+    },
+    {
+      id: "mb2",
+      name: "B660 (LGA1700)",
+      socket: "LGA1700",
+      pcieGen: 4,
+      supportedRamTypes: ["DDR4"],
+      maxRamSpeed: 5000,
+      sataPorts: 4,
+      nvmeSlots: 2,
+    },
+    {
+      id: "mb3",
+      name: "Z690 (LGA1700, DDR5)",
+      socket: "LGA1700",
+      pcieGen: 5,
+      supportedRamTypes: ["DDR5"],
+      maxRamSpeed: 6400,
+      sataPorts: 6,
+      nvmeSlots: 3,
+    },
+  ],
+  storage: [
+    { id: "sto1", name: "1TB NVMe", interface: "NVMe" },
+    { id: "sto2", name: "1TB SATA SSD", interface: "SATA" },
+    { id: "sto3", name: "2TB HDD", interface: "SATA" },
+  ],
+  psu: [
+    { id: "psu1", name: "450W", wattage: 450 },
+    { id: "psu2", name: "550W", wattage: 550 },
+    { id: "psu3", name: "750W", wattage: 750 },
+  ],
+};
 
-const tooltip = document.getElementById("tooltip");
+const selection = {
+  cpu: null,
+  gpu: null,
+  ram: null,
+  motherboard: null,
+  storage: null,
+  psu: null,
+};
 
-window.addEventListener("mousemove", (event) => {
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+function makeLabelTexture(text) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#1e1e1e";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "28px Montserrat, Arial";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
 
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(hotspotObjects);
+function createLabeledBox(sizeVec3, labelText, color) {
+  const geo = new THREE.BoxGeometry(sizeVec3.x, sizeVec3.y, sizeVec3.z);
+  const tex = makeLabelTexture(labelText);
+  const mat = new THREE.MeshBasicMaterial({ color, map: tex });
+  const mesh = new THREE.Mesh(geo, mat);
+  return mesh;
+}
 
-  if (intersects.length > 0) {
-    const hotspot = intersects[0].object;
-    const data = hotspotData[hotspot.index];
+const partCategoryList = ["cpu", "gpu", "ram", "motherboard", "storage", "psu"];
+const categoryColor = {
+  cpu: 0xff8c66,
+  gpu: 0x66d9ff,
+  ram: 0xa6ff66,
+  motherboard: 0xd266ff,
+  storage: 0xffd166,
+  psu: 0x66ffd1,
+};
 
-    tooltip.style.display = "block";
-    tooltip.style.left = event.clientX + 15 + "px";
-    tooltip.style.top = event.clientY + 15 + "px";
+const shelfRoot = new THREE.Group();
+scene.add(shelfRoot);
 
-    tooltip.innerHTML = `
-  <div style="font-weight: bold; font-size: 16px; margin-bottom: 6px; color: #ffd700;">
-    ${data.title}
-  </div>
-  <div style="margin-bottom: 8px; font-size: 13px; color: #ddd;">
-    ${data.desc}
-  </div>
-  <img src="${data.img}" 
-       alt="${data.title}" 
-       style="width: 100%; border-radius: 8px; margin-top: 6px;" />
-`;
-  } else {
-    tooltip.style.display = "none";
-  }
+const shelfWidth = 6.0;
+const shelfDepth = 0.6;
+const shelves = 3;
+const shelfStartY = 0.7;
+const shelfGapY = 0.65;
+const shelfClearance = 0.25;
+const shelfHalf = shelfWidth / 2;
+const shelfCenterX = -ROOM_W / 2 + shelfHalf + shelfClearance;
+const shelfZ = -ROOM_D / 2 + shelfDepth / 2;
+
+const postMat = new THREE.MeshStandardMaterial({ color: 0x58524a });
+const postGeo = new THREE.BoxGeometry(0.1, shelves * shelfGapY + 0.6, 0.12);
+const postY = shelfStartY + (shelves - 1) * shelfGapY * 0.5;
+const postOffsets = [-shelfHalf + 0.15, shelfHalf - 0.15];
+postOffsets.forEach((ox) => {
+  const post = new THREE.Mesh(postGeo, postMat);
+  post.position.set(shelfCenterX + ox, postY, shelfZ);
+  post.castShadow = true;
+  post.receiveShadow = true;
+  shelfRoot.add(post);
 });
+
+const boardMat = new THREE.MeshStandardMaterial({ color: 0x7a746b });
+for (let i = 0; i < shelves; i++) {
+  const y = shelfStartY + i * shelfGapY;
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(shelfWidth, 0.08, shelfDepth),
+    boardMat
+  );
+  board.position.set(shelfCenterX, y, shelfZ);
+  board.castShadow = true;
+  board.receiveShadow = true;
+  shelfRoot.add(board);
+}
+
+const backPanel = new THREE.Mesh(
+  new THREE.PlaneGeometry(shelfWidth + 0.4, shelves * shelfGapY + 0.6),
+  new THREE.MeshStandardMaterial({ color: 0x2b3036, roughness: 1 })
+);
+backPanel.position.set(shelfCenterX, postY, shelfZ - shelfDepth / 2 - 0.02);
+backPanel.receiveShadow = true;
+shelfRoot.add(backPanel);
+
+const spawnRoot = new THREE.Group();
+scene.add(spawnRoot);
+
+cabinet.position.set(
+  shelfCenterX + shelfHalf + 0.4 + cabinetSize.x / 2,
+  0.9,
+  shelfZ
+);
+
+function spawnParts() {
+  const columns = 3;
+  const colGap = 2.0;
+  const rowGap = 0.38;
+  const verticalOffset = 0.25;
+  const categoriesPerShelf = 2;
+  const itemSize = new THREE.Vector3(0.8, 0.35, 0.35);
+
+  partCategoryList.forEach((category, idx) => {
+    const shelfIndex = Math.floor(idx / categoriesPerShelf);
+    const sideIndex = idx % categoriesPerShelf;
+    const y = shelfStartY + shelfIndex * shelfGapY;
+    const startX =
+      shelfCenterX + (sideIndex === 0 ? -colGap * 0.9 : colGap * 0.9);
+    PARTS[category].forEach((item, i) => {
+      const label = `${category.toUpperCase()}\n${item.name}`;
+      const box = createLabeledBox(itemSize, label, categoryColor[category]);
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+      box.position.set(
+        startX + (col - 1) * 1.05,
+        y + (row ? -rowGap : 0) + verticalOffset,
+        shelfZ
+      );
+      box.userData = { category, id: item.id, item };
+      box.castShadow = true;
+      box.receiveShadow = true;
+      spawnRoot.add(box);
+      selectableMeshes.push(box);
+    });
+  });
+}
+
+const cabinetSlots = {
+  cpu: new THREE.Vector3(-0.3, 0.4, 0),
+  gpu: new THREE.Vector3(0.4, 0.1, 0),
+  ram: new THREE.Vector3(-0.6, 0.2, 0),
+  motherboard: new THREE.Vector3(-0.1, 0.2, 0),
+  storage: new THREE.Vector3(0.6, -0.2, 0.2),
+  psu: new THREE.Vector3(-0.6, -0.6, 0),
+};
+
+const placedMeshes = {
+  cpu: null,
+  gpu: null,
+  ram: null,
+  motherboard: null,
+  storage: null,
+  psu: null,
+};
+
+function selectPartFromScene(mesh) {
+  const { category, id } = mesh.userData || {};
+  if (!category || !id) return;
+  const item = PARTS[category].find((x) => x.id === id);
+  if (!item) return;
+  selection[category] = item;
+
+  if (placedMeshes[category]) {
+    const old = placedMeshes[category];
+    old.parent?.remove(old);
+    const idx = placedClickable.indexOf(old);
+    if (idx >= 0) placedClickable.splice(idx, 1);
+    old.geometry.dispose();
+    if (Array.isArray(old.material)) old.material.forEach((m) => m.dispose());
+    else if (old.material) old.material.dispose();
+  }
+
+  const label = `${category.toUpperCase()}\n${item.name}`;
+  const size = new THREE.Vector3(0.6, 0.3, 0.3);
+  const placed = createLabeledBox(size, label, categoryColor[category]);
+  placed.position.copy(cabinetSlots[category]);
+  placed.userData = { category, id };
+  placed.castShadow = true;
+  placed.receiveShadow = true;
+  cabinet.add(placed);
+  placedMeshes[category] = placed;
+  placedClickable.push(placed);
+}
+
+function allSelected() {
+  return Object.keys(selection).every((k) => selection[k]);
+}
+function validateBuild() {
+  const errors = [];
+  const { cpu, gpu, ram, motherboard, storage, psu } = selection;
+
+  if (!Object.values(selection).every(Boolean)) {
+    errors.push("Please select one part for each category.");
+    return { ok: false, errors };
+  }
+
+  if (cpu.socket !== motherboard.socket) {
+    errors.push(
+      `CPU socket ${cpu.socket} is not compatible with motherboard socket ${motherboard.socket}.`
+    );
+  }
+  if (!motherboard.supportedRamTypes.includes(ram.type)) {
+    errors.push(
+      `RAM type ${
+        ram.type
+      } is not supported by the motherboard (supports ${motherboard.supportedRamTypes.join(
+        ", "
+      )}).`
+    );
+  }
+  if (ram.speed > motherboard.maxRamSpeed) {
+    errors.push(
+      `RAM speed ${ram.speed} exceeds motherboard max supported speed ${motherboard.maxRamSpeed}.`
+    );
+  }
+  if (gpu.pcieGen > motherboard.pcieGen) {
+    errors.push(
+      `GPU requires PCIe Gen ${gpu.pcieGen}, but motherboard supports up to Gen ${motherboard.pcieGen}.`
+    );
+  }
+  if (storage.interface === "NVMe" && motherboard.nvmeSlots < 1) {
+    errors.push(
+      "Selected storage is NVMe but the motherboard has no NVMe slots."
+    );
+  }
+  if (storage.interface === "SATA" && motherboard.sataPorts < 1) {
+    errors.push(
+      "Selected storage is SATA but the motherboard has no SATA ports."
+    );
+  }
+  const requiredPower = cpu.tdp + gpu.tdp + 100;
+  if (psu.wattage < requiredPower) {
+    errors.push(
+      `PSU wattage ${psu.wattage}W is insufficient. Need at least ${requiredPower}W.`
+    );
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+function setupPicking() {
+  function updatePointer(event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+
+  renderer.domElement.addEventListener("pointermove", updatePointer);
+  renderer.domElement.addEventListener("pointerdown", (event) => {
+    updatePointer(event);
+    raycaster.setFromCamera(pointer, camera);
+    let hits = raycaster.intersectObjects(powerClickable, false);
+    if (hits.length) {
+      const { ok, errors } = validateBuild();
+      const hudResult = document.getElementById("hud-result");
+      if (hudResult) {
+        hudResult.className = "";
+        if (ok) {
+          hudResult.classList.add("ok");
+          hudResult.textContent = "✅ PC build is compatible and should run.";
+        } else {
+          hudResult.classList.add("error");
+          hudResult.textContent = `❌ Issues: ${errors.join(" | ")}`;
+        }
+      }
+      return;
+    }
+    hits = raycaster.intersectObjects(placedClickable, false);
+    if (hits.length) {
+      const hit = hits[0].object;
+      const { category } = hit.userData || {};
+      if (category && placedMeshes[category] === hit) {
+        hit.parent?.remove(hit);
+        const idx = placedClickable.indexOf(hit);
+        if (idx >= 0) placedClickable.splice(idx, 1);
+        hit.geometry.dispose();
+        if (Array.isArray(hit.material))
+          hit.material.forEach((m) => m.dispose());
+        else if (hit.material) hit.material.dispose();
+        placedMeshes[category] = null;
+        selection[category] = null;
+        return;
+      }
+    }
+    hits = raycaster.intersectObjects(selectableMeshes, false);
+    if (hits.length) selectPartFromScene(hits[0].object);
+  });
+}
+
+spawnParts();
+setupPicking();
+
+const btnReset = document.getElementById("btn-reset");
+const hudResult = document.getElementById("hud-result");
+
+if (btnReset && hudResult) {
+  btnReset.addEventListener("click", () => {
+    Object.keys(selection).forEach((k) => (selection[k] = null));
+    Object.keys(placedMeshes).forEach((k) => {
+      const m = placedMeshes[k];
+      if (!m) return;
+      m.parent?.remove(m);
+      m.geometry.dispose();
+      if (Array.isArray(m.material)) m.material.forEach((mm) => mm.dispose());
+      else if (m.material) m.material.dispose();
+      placedMeshes[k] = null;
+    });
+    placedClickable.splice(0, placedClickable.length);
+    hudResult.className = "";
+    hudResult.textContent = "";
+  });
+}
+
+// --- NEW OBJECTS AND PLACEMENT ---
+
+// Helper to load GLTF models
+function loadGLTF(path, position, scale, rotation, castShadow = true, receiveShadow = true) {
+    gltfLoader.load(path, (gltf) => {
+        gltf.scene.position.copy(position);
+        gltf.scene.scale.set(scale.x, scale.y, scale.z);
+        gltf.scene.rotation.set(rotation.x, rotation.y, rotation.z);
+        gltf.scene.traverse((node) => {
+            if (node.isMesh) {
+                node.castShadow = castShadow;
+                node.receiveShadow = receiveShadow;
+                // Optional: Adjust materials for consistency if needed
+                if (node.material.map) node.material.map.colorSpace = THREE.SRGBColorSpace;
+                node.material.roughness = Math.max(0.5, node.material.roughness || 0.5); // Ensure some roughness
+            }
+        });
+        scene.add(gltf.scene);
+    }, undefined, (error) => {
+        console.error('An error occurred loading GLTF model:', path, error);
+    });
+}
+
+// 1. Mat for entrance (simple plane)
+const matGeo = new THREE.PlaneGeometry(3, 2);
+const matTex = new THREE.TextureLoader().load('/static/textures/mat_texture.jpg'); // Replace with actual path
+matTex.colorSpace = THREE.SRGBColorSpace;
+const matMat = new THREE.MeshStandardMaterial({ map: matTex, roughness: 0.8, metalness: 0 });
+const entranceMat = new THREE.Mesh(matGeo, matMat);
+entranceMat.rotation.x = -Math.PI / 2; // Lie flat on the floor
+entranceMat.position.set(0, 0.01, ROOM_D / 2 - 2); // Near the "entrance"
+entranceMat.receiveShadow = true;
+scene.add(entranceMat);
+
+// 2. Posters (simple planes with textures)
+function createPoster(x, y, z, rotationY, texturePath, width = 2, height = 1.5) {
+    const posterGeo = new THREE.PlaneGeometry(width, height);
+    const posterTex = new THREE.TextureLoader().load(texturePath); // Replace with actual path
+    posterTex.colorSpace = THREE.SRGBColorSpace;
+    const posterMat = new THREE.MeshStandardMaterial({ map: posterTex, side: THREE.DoubleSide });
+    const poster = new THREE.Mesh(posterGeo, posterMat);
+    poster.position.set(x, y, z);
+    poster.rotation.y = rotationY;
+    poster.receiveShadow = true;
+    scene.add(poster);
+}
+
+// Example posters:
+// On the back wall, above the cabinet/shelf area
+createPoster(shelfCenterX + 3, ROOM_H - 1.5, shelfZ - shelfDepth / 2 - 0.03, 0, '/static/textures/poster_gaming.jpg', 2.5, 1.8);
+// On the opposite wall
+createPoster(ROOM_W / 2 - 0.05, ROOM_H - 2, 0, -Math.PI / 2, '/static/textures/poster_tech.jpg', 3, 2);
+createPoster(-ROOM_W / 2 + 0.05, ROOM_H - 2.5, 5, Math.PI / 2, '/static/textures/poster_pcbuild.jpg', 2.8, 2);
+
+
+// 3. Display Table (simple box for now, ideally GLTF)
+const displayTableGeo = new THREE.BoxGeometry(3, 1.0, 1.5);
+const displayTableMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.7 }); // Wooden brown
+const displayTable = new THREE.Mesh(displayTableGeo, displayTableMat);
+displayTable.position.set(0, 0.5, 2); // More central
+displayTable.castShadow = true;
+displayTable.receiveShadow = true;
+scene.add(displayTable);
+
+// Add "dummy" PC components on the table (can be simple boxes or loaded GLTFs)
+const monitorGeo = new THREE.BoxGeometry(0.8, 0.5, 0.05);
+const monitorMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.2 });
+const monitor = new THREE.Mesh(monitorGeo, monitorMat);
+monitor.position.set(0, 1.25, 2.7); // On the table
+monitor.castShadow = true;
+scene.add(monitor);
+
+const keyboardGeo = new THREE.BoxGeometry(0.6, 0.05, 0.2);
+const keyboardMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.5 });
+const keyboard = new THREE.Mesh(keyboardGeo, keyboardMat);
+keyboard.position.set(0, 1.03, 3.2);
+keyboard.castShadow = true;
+scene.add(keyboard);
+
+// 4. Cozy Corner with Chair and Side Table (simple boxes, ideally GLTF)
+const chairGeo = new THREE.BoxGeometry(1.0, 1.0, 1.0); // Simple block chair
+const chairMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 }); // Dark brown fabric
+const chair = new THREE.Mesh(chairGeo, chairMat);
+chair.position.set(ROOM_W / 2 - 2, 0.5, -ROOM_D / 2 + 3); // In a corner
+chair.rotation.y = Math.PI / 4; // Angled
+chair.castShadow = true;
+chair.receiveShadow = true;
+scene.add(chair);
+
+const sideTableGeo = new THREE.BoxGeometry(0.7, 0.6, 0.7);
+const sideTableMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.7 }); // Matching wood
+const sideTable = new THREE.Mesh(sideTableGeo, sideTableMat);
+sideTable.position.set(ROOM_W / 2 - 3, 0.3, -ROOM_D / 2 + 2); // Beside the chair
+sideTable.castShadow = true;
+sideTable.receiveShadow = true;
+scene.add(sideTable);
+
+// Small decorative elements on side table
+const coffeeCupGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.2, 16);
+const coffeeCupMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
+const coffeeCup = new THREE.Mesh(coffeeCupGeo, coffeeCupMat);
+coffeeCup.position.set(ROOM_W / 2 - 3, 0.7, -ROOM_D / 2 + 2);
+coffeeCup.castShadow = true;
+scene.add(coffeeCup);
+
+// 5. Desk/Counter for the cabinet (replace cabinet's wireframe)
+// Create a more solid-looking counter where the cabinet is.
+const counterGeo = new THREE.BoxGeometry(cabinetSize.x + 1, 0.9, cabinetSize.z + 0.2);
+const counterMat = new THREE.MeshStandardMaterial({ color: 0x4a423a, roughness: 0.6 }); // Dark wood/laminate
+const counter = new THREE.Mesh(counterGeo, counterMat);
+counter.position.set(cabinet.position.x, 0.45, cabinet.position.z);
+counter.castShadow = true;
+counter.receiveShadow = true;
+scene.add(counter);
+
+// To make the wireframe cabinet 'sit' on the counter, adjust its Y position relative to the counter.
+cabinet.position.y = counter.position.y + counterGeo.parameters.height / 2 + cabinetSize.y / 2;
+
+
+// Example GLTF Loader usage (you'd need to create/find these models)
+// This is illustrative, assuming you have files like 'gaming_chair.glb', 'desktop_monitor.glb' etc.
+/*
+loadGLTF(
+    '/static/models/gaming_chair.glb',
+    new THREE.Vector3(ROOM_W / 2 - 2, 0, -ROOM_D / 2 + 3),
+    new THREE.Vector3(0.8, 0.8, 0.8),
+    new THREE.Vector3(0, Math.PI / 4, 0)
+);
+
+loadGLTF(
+    '/static/models/desktop_monitor.glb',
+    new THREE.Vector3(0, 1.0, 2.7),
+    new THREE.Vector3(0.5, 0.5, 0.5),
+    new THREE.Vector3(0, 0, 0)
+);
+
+loadGLTF(
+    '/static/models/plant.glb',
+    new THREE.Vector3(-ROOM_W / 2 + 1, 0, -ROOM_D / 2 + 1),
+    new THREE.Vector3(0.3, 0.3, 0.3),
+    new THREE.Vector3(0, 0, 0)
+);
+*/
+
+// --- End NEW OBJECTS AND PLACEMENT ---
