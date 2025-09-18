@@ -1,6 +1,8 @@
 import * as THREE from "three";
 
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RectAreaLightUniformsLib } from "three/examples/jsm/lights/RectAreaLightUniformsLib.js";
+import { RectAreaLightHelper } from "three/examples/jsm/helpers/RectAreaLightHelper.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -14,6 +16,8 @@ const camera = new THREE.PerspectiveCamera(
 
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setClearColor(0x7a7a7a, 1);
 document.body.appendChild(renderer.domElement);
 
 // --- Enable Shadows ---
@@ -29,11 +33,39 @@ const pointer = new THREE.Vector2();
 const selectableMeshes = [];
 const placedClickable = [];
 const powerClickable = [];
+const dragState = { dragging: false, sourceMesh: null, ghost: null, plane: null };
+const activeTweens = [];
+
+function easeInOutQuad(t) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+function addPositionTween(object3D, toVec3, duration = 0.4, onComplete) {
+  const from = object3D.position.clone();
+  const to = toVec3.clone();
+  const start = performance.now();
+  activeTweens.push({
+    update(now) {
+      const t = Math.min(1, (now - start) / (duration * 1000));
+      const k = easeInOutQuad(t);
+      object3D.position.set(
+        from.x + (to.x - from.x) * k,
+        from.y + (to.y - from.y) * k,
+        from.z + (to.z - from.z) * k
+      );
+      if (t >= 1) {
+        if (onComplete) onComplete();
+        return true;
+      }
+      return false;
+    },
+  });
+}
 
 const rgbeLoader = new RGBELoader();
 rgbeLoader.load("/static/textures/bg.hdr", (bg) => {
   bg.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = bg;
+  // Keep HDR for reflections/lighting but not as visible skybox
   scene.environment = bg;
 });
 const gltfLoader = new GLTFLoader();
@@ -42,7 +74,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 camera.position.set(0, 1.6, 7);
 controls.target.set(0, 1.0, 0);
 controls.enableDamping = true;
-controls.dampingFactor = 0.05;
+controls.dampingFactor = 0.1;
 controls.maxPolarAngle = Math.PI * 0.49;
 controls.minDistance = 1.2;
 controls.maxDistance = 8;
@@ -53,8 +85,8 @@ const ROOM_H = 6;
 const ROOM_D = 20;
 const roomGeo = new THREE.BoxGeometry(ROOM_W, ROOM_H, ROOM_D);
 const roomMat = new THREE.MeshStandardMaterial({
-  color: 0x3a2f2a,
-  roughness: 1.0,
+  color: 0x7a7a7a,
+  roughness: 0.95,
   metalness: 0.0,
   side: THREE.BackSide,
 });
@@ -74,12 +106,12 @@ const bounds = {
 };
 
 // --- Improved Lighting ---
-scene.add(new THREE.AmbientLight(0xffe7d6, 0.7)); // Slightly brighter ambient
-const hemi = new THREE.HemisphereLight(0xfff0e0, 0x20150f, 0.4); // Slightly brighter hemisphere
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+const hemi = new THREE.HemisphereLight(0xffffff, 0xb0b5bd, 0.55);
 scene.add(hemi);
 
 // Directional light (simulating sun/window light)
-const dirLight = new THREE.DirectionalLight(0xfff1e5, 0.65); // Brighter
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.35);
 dirLight.position.set(5, 7, 3); // Positioned to cast shadows from a side
 dirLight.castShadow = true; // This light casts shadows
 dirLight.shadow.mapSize.width = 1024; // Shadow quality
@@ -92,8 +124,29 @@ dirLight.shadow.camera.top = 10;
 dirLight.shadow.camera.bottom = -10;
 scene.add(dirLight);
 
+// Big LED ceiling panels (area lights)
+RectAreaLightUniformsLib.init();
+const ceilingLights = [];
+function addCeilingPanel(x, z, w = 6, h = 2, intensity = 5) {
+  const area = new THREE.RectAreaLight(0xffffff, intensity, w, h);
+  area.position.set(x, ROOM_H - 0.25, z);
+  area.lookAt(x, 0, z);
+  scene.add(area);
+  ceilingLights.push(area);
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, h),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.2, roughness: 0.25 })
+  );
+  panel.rotation.x = Math.PI / 2;
+  panel.position.copy(area.position).y -= 0.02;
+  scene.add(panel);
+}
+addCeilingPanel(-4, 0, 6, 1.8, 10);
+addCeilingPanel(0, 0, 6, 1.8, 14);
+addCeilingPanel(4, 0, 6, 1.8, 10);
+
 // Spotlights for warmth and focus
-const spotLight1 = new THREE.SpotLight(0xffaa66, 0.8); // Warm yellow light
+const spotLight1 = new THREE.SpotLight(0xffaa66, 2.8); // Warm yellow light
 spotLight1.position.set(-2, 4, 3);
 spotLight1.angle = Math.PI / 8;
 spotLight1.penumbra = 0.5; // Soft edge
@@ -128,11 +181,12 @@ const cabinetGeo = new THREE.BoxGeometry(
   cabinetSize.y,
   cabinetSize.z
 );
-const cabinetMat = new THREE.MeshBasicMaterial({
-  color: 0x8aa1b1,
-  wireframe: true,
+const cabinetMat = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  roughness: 0.5,
+  metalness: 0.05,
   transparent: true,
-  opacity: 0.5,
+  opacity: 0.25,
 });
 const cabinet = new THREE.Mesh(cabinetGeo, cabinetMat);
 cabinet.position.set(-ROOM_W / 2 + 5, 0.9, -1.0);
@@ -183,6 +237,37 @@ function onKeyDown(e) {
     case "ShiftRight":
       moveState.sprint = true;
       break;
+    case "KeyG": {
+      // Start grab if pointing at a selectable mesh and not already dragging
+      if (dragState.dragging) break;
+      // Use current pointer to try pick
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(selectableMeshes, false);
+      if (hits.length) {
+        const picked = hits[0];
+        const sourceMesh = picked.object;
+        dragState.dragging = true;
+        dragState.sourceMesh = sourceMesh;
+        // Horizontal plane at pick height
+        dragState.plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -picked.point.y);
+        // Ghost
+        const ghostSize = new THREE.Vector3(0.7, 0.32, 0.32);
+        const ghostLabel = `${sourceMesh.userData.category.toUpperCase()}\n${sourceMesh.userData.item.name}`;
+        dragState.ghost = createLabeledBox(
+          ghostSize,
+          ghostLabel,
+          categoryColor[sourceMesh.userData.category]
+        );
+        dragState.ghost.material.transparent = true;
+        dragState.ghost.material.opacity = 0.7;
+        dragState.ghost.castShadow = false;
+        dragState.ghost.receiveShadow = false;
+        dragState.ghost.position.copy(picked.point);
+        scene.add(dragState.ghost);
+      }
+      e.preventDefault();
+      break;
+    }
   }
 }
 function onKeyUp(e) {
@@ -207,6 +292,27 @@ function onKeyUp(e) {
     case "ShiftRight":
       moveState.sprint = false;
       break;
+    case "KeyG": {
+      // Release grab: place if over cabinet, else cancel
+      if (dragState.dragging) {
+        const dropPos = dragState.ghost ? dragState.ghost.position.clone() : null;
+        const cabinetBox = new THREE.Box3().setFromObject(cabinet);
+        if (dropPos && cabinetBox.containsPoint(dropPos)) {
+          selectPartFromSceneWithAnimation(dragState.sourceMesh, dropPos);
+        }
+        if (dragState.ghost) {
+          dragState.ghost.parent?.remove(dragState.ghost);
+          if (dragState.ghost.geometry) dragState.ghost.geometry.dispose();
+          if (dragState.ghost.material) dragState.ghost.material.dispose();
+        }
+        dragState.dragging = false;
+        dragState.sourceMesh = null;
+        dragState.ghost = null;
+        dragState.plane = null;
+      }
+      e.preventDefault();
+      break;
+    }
   }
 }
 window.addEventListener("keydown", onKeyDown);
@@ -227,6 +333,12 @@ function animate() {
     moveState.left ||
     moveState.right
   ) {
+    // Disable camera WASD move while grabbing
+    if (dragState.dragging) {
+      controls.update();
+      renderer.render(scene, camera);
+      return;
+    }
     tmpForward.copy(camera.getWorldDirection(tmpForward));
     tmpForward.y = 0;
     tmpForward.normalize();
@@ -270,8 +382,27 @@ function animate() {
     }
   }
 
-  if (moved) controls.update();
-  else controls.update();
+  // Smooth orbit controls and run tweens; disable orbit rotate while dragging
+  controls.enableRotate = !dragState.dragging;
+  controls.enablePan = !dragState.dragging;
+  controls.enableZoom = !dragState.dragging;
+  controls.update();
+  if (activeTweens.length) {
+    const now = performance.now();
+    for (let i = activeTweens.length - 1; i >= 0; i--) {
+      const done = activeTweens[i].update(now);
+      if (done) activeTweens.splice(i, 1);
+    }
+  }
+  // Cycle RGB lights subtly
+  if (rgbLights && rgbLights.length) {
+    const t = performance.now() * 0.001;
+    rgbLights.forEach((l, i) => {
+      const hue = (t * 0.1 + i * 0.2) % 1;
+      const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
+      l.color.copy(color);
+    });
+  }
   renderer.render(scene, camera);
 }
 
@@ -400,12 +531,12 @@ const shelfDepth = 0.6;
 const shelves = 3;
 const shelfStartY = 0.7;
 const shelfGapY = 0.65;
-const shelfClearance = 0.25;
+const shelfClearance = 0.6; // more space from side wall
 const shelfHalf = shelfWidth / 2;
 const shelfCenterX = -ROOM_W / 2 + shelfHalf + shelfClearance;
-const shelfZ = -ROOM_D / 2 + shelfDepth / 2;
+const shelfZ = -ROOM_D / 2 + shelfDepth / 2 + 1.0; // pull furniture away from back wall
 
-const postMat = new THREE.MeshStandardMaterial({ color: 0x58524a });
+const postMat = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.6 });
 const postGeo = new THREE.BoxGeometry(0.1, shelves * shelfGapY + 0.6, 0.12);
 const postY = shelfStartY + (shelves - 1) * shelfGapY * 0.5;
 const postOffsets = [-shelfHalf + 0.15, shelfHalf - 0.15];
@@ -417,7 +548,7 @@ postOffsets.forEach((ox) => {
   shelfRoot.add(post);
 });
 
-const boardMat = new THREE.MeshStandardMaterial({ color: 0x7a746b });
+const boardMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.7 });
 for (let i = 0; i < shelves; i++) {
   const y = shelfStartY + i * shelfGapY;
   const board = new THREE.Mesh(
@@ -432,14 +563,31 @@ for (let i = 0; i < shelves; i++) {
 
 const backPanel = new THREE.Mesh(
   new THREE.PlaneGeometry(shelfWidth + 0.4, shelves * shelfGapY + 0.6),
-  new THREE.MeshStandardMaterial({ color: 0x2b3036, roughness: 1 })
+  new THREE.MeshStandardMaterial({ color: 0x7a7a7a, roughness: 0.9 })
 );
-backPanel.position.set(shelfCenterX, postY, shelfZ - shelfDepth / 2 - 0.02);
+// Nudge slightly INSIDE the room so we never peek outside the wall
+backPanel.position.set(shelfCenterX, postY, shelfZ - shelfDepth / 2 + 0.02);
 backPanel.receiveShadow = true;
 shelfRoot.add(backPanel);
 
 const spawnRoot = new THREE.Group();
 scene.add(spawnRoot);
+
+// RGB accent lights around shelf and cabinet
+const rgbLights = [];
+function addRgbStrip(position, color = 0x00ffff, intensity = 1.6, distance = 3) {
+  const light = new THREE.PointLight(color, intensity, distance, 2.0);
+  light.position.copy(position);
+  light.castShadow = false;
+  scene.add(light);
+  rgbLights.push(light);
+}
+// around shelf edges
+addRgbStrip(new THREE.Vector3(shelfCenterX - shelfHalf, 1.6, shelfZ + 0.1), 0x00ffff);
+addRgbStrip(new THREE.Vector3(shelfCenterX + shelfHalf, 1.0, shelfZ + 0.1), 0xff00ff);
+// near cabinet front and top
+addRgbStrip(new THREE.Vector3(cabinet.position.x, cabinet.position.y + 0.6, cabinet.position.z + cabinetSize.z / 2 + 0.2), 0xff3366);
+addRgbStrip(new THREE.Vector3(cabinet.position.x + cabinetSize.x / 2 + 0.2, cabinet.position.y, cabinet.position.z), 0x66aaff);
 
 cabinet.position.set(
   shelfCenterX + shelfHalf + 0.4 + cabinetSize.x / 2,
@@ -447,6 +595,7 @@ cabinet.position.set(
   shelfZ
 );
 
+let ramDisplayInstances = 0;
 function spawnParts() {
   const columns = 3;
   const colGap = 2.0;
@@ -462,20 +611,53 @@ function spawnParts() {
     const startX =
       shelfCenterX + (sideIndex === 0 ? -colGap * 0.9 : colGap * 0.9);
     PARTS[category].forEach((item, i) => {
-      const label = `${category.toUpperCase()}\n${item.name}`;
-      const box = createLabeledBox(itemSize, label, categoryColor[category]);
       const col = i % columns;
       const row = Math.floor(i / columns);
-      box.position.set(
+      const position = new THREE.Vector3(
         startX + (col - 1) * 1.05,
         y + (row ? -rowGap : 0) + verticalOffset,
         shelfZ
       );
-      box.userData = { category, id: item.id, item };
-      box.castShadow = true;
-      box.receiveShadow = true;
-      spawnRoot.add(box);
-      selectableMeshes.push(box);
+
+      if (category === 'ram' && ramDisplayInstances < 1) {
+        // Load DDR5 RAM GLTF model
+        gltfLoader.load('/models/ram.glb', (gltf) => {
+          const ramModel = gltf.scene;
+          ramModel.position.copy(position);
+          ramModel.scale.set(0.5, 0.5, 0.5); // Larger on shelf for visibility
+          ramModel.userData = { category, id: item.id, item };
+          ramModel.traverse((node) => {
+            if (node.isMesh) {
+              node.castShadow = true;
+              node.receiveShadow = true;
+            }
+          });
+          spawnRoot.add(ramModel);
+          selectableMeshes.push(ramModel);
+          ramDisplayInstances++;
+        }, undefined, (error) => {
+          console.error('Error loading DDR5 RAM model:', error);
+          // Fallback to box if GLTF fails
+          const label = `${category.toUpperCase()}\n${item.name}`;
+          const box = createLabeledBox(itemSize, label, categoryColor[category]);
+          box.position.copy(position);
+          box.userData = { category, id: item.id, item };
+          box.castShadow = true;
+          box.receiveShadow = true;
+          spawnRoot.add(box);
+          selectableMeshes.push(box);
+        });
+      } else {
+        // Use boxes for other categories
+        const label = `${category.toUpperCase()}\n${item.name}`;
+        const box = createLabeledBox(itemSize, label, categoryColor[category]);
+        box.position.copy(position);
+        box.userData = { category, id: item.id, item };
+        box.castShadow = true;
+        box.receiveShadow = true;
+        spawnRoot.add(box);
+        selectableMeshes.push(box);
+      }
     });
   });
 }
@@ -496,6 +678,16 @@ const placedMeshes = {
   motherboard: null,
   storage: null,
   psu: null,
+};
+
+// More realistic target transforms for each category
+const cabinetSlotTransforms = {
+  cpu: { pos: new THREE.Vector3(-0.25, 0.6, -0.05), rot: new THREE.Euler(0, 0, 0) },
+  gpu: { pos: new THREE.Vector3(0.45, 0.25, 0.0), rot: new THREE.Euler(0, -Math.PI / 2, 0) },
+  ram: { pos: new THREE.Vector3(-0.45, 0.45, 0.05), rot: new THREE.Euler(0, 0, 0) },
+  motherboard: { pos: new THREE.Vector3(-0.15, 0.45, -0.35), rot: new THREE.Euler(0, Math.PI, 0) },
+  storage: { pos: new THREE.Vector3(0.6, -0.15, 0.25), rot: new THREE.Euler(0, 0, 0) },
+  psu: { pos: new THREE.Vector3(-0.55, -0.65, 0.0), rot: new THREE.Euler(0, 0, 0) },
 };
 
 function selectPartFromScene(mesh) {
@@ -523,6 +715,59 @@ function selectPartFromScene(mesh) {
   placed.castShadow = true;
   placed.receiveShadow = true;
   cabinet.add(placed);
+  placedMeshes[category] = placed;
+  placedClickable.push(placed);
+}
+
+function selectPartFromSceneWithAnimation(sourceMesh, worldDropPos) {
+  const { category, id } = sourceMesh.userData || {};
+  if (!category || !id) return;
+  const item = PARTS[category].find((x) => x.id === id);
+  if (!item) return;
+  selection[category] = item;
+
+  if (placedMeshes[category]) {
+    const old = placedMeshes[category];
+    old.parent?.remove(old);
+    const idx = placedClickable.indexOf(old);
+    if (idx >= 0) placedClickable.splice(idx, 1);
+    // Properly dispose of GLTF models
+    if (old.geometry) old.geometry.dispose();
+    if (Array.isArray(old.material)) old.material.forEach((m) => m.dispose());
+    else if (old.material) old.material.dispose();
+    // Dispose of child meshes if it's a GLTF model
+    old.traverse((node) => {
+      if (node.geometry) node.geometry.dispose();
+      if (Array.isArray(node.material)) node.material.forEach((m) => m.dispose());
+      else if (node.material) node.material.dispose();
+    });
+  }
+
+  let placed;
+  if (category === 'ram') {
+    // Clone the GLTF model for placement
+    placed = sourceMesh.clone();
+    placed.scale.set(0.35, 0.35, 0.35); // Slightly larger in cabinet
+  } else {
+    // Use boxes for other categories
+    const label = `${category.toUpperCase()}\n${item.name}`;
+    const size = new THREE.Vector3(0.6, 0.3, 0.3);
+    placed = createLabeledBox(size, label, categoryColor[category]);
+  }
+
+  // Convert world drop position to cabinet local space for a smooth slide in
+  const localStart = cabinet.worldToLocal(worldDropPos.clone());
+  placed.position.copy(localStart);
+  placed.userData = { category, id };
+  placed.castShadow = true;
+  placed.receiveShadow = true;
+  cabinet.add(placed);
+
+  const target = cabinetSlotTransforms[category] || { pos: cabinetSlots[category], rot: new THREE.Euler(0, 0, 0) };
+  addPositionTween(placed, target.pos.clone(), 0.45);
+  // Also orient realistically
+  placed.rotation.copy(target.rot);
+
   placedMeshes[category] = placed;
   placedClickable.push(placed);
 }
@@ -590,11 +835,36 @@ function setupPicking() {
     pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  renderer.domElement.addEventListener("pointermove", updatePointer);
+  renderer.domElement.addEventListener("pointermove", (event) => {
+    updatePointer(event);
+    if (dragState.dragging && dragState.plane) {
+      raycaster.setFromCamera(pointer, camera);
+      const hitPoint = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(dragState.plane, hitPoint)) {
+        dragState.ghost.position.copy(hitPoint);
+        // Auto-snap when ghost enters expanded cabinet bounds while grabbing with G
+        const expanded = new THREE.Box3().setFromObject(cabinet);
+        const expandPad = new THREE.Vector3(0.3, 0.3, 0.3);
+        expanded.min.sub(expandPad);
+        expanded.max.add(expandPad);
+        if (expanded.containsPoint(dragState.ghost.position)) {
+          selectPartFromSceneWithAnimation(dragState.sourceMesh, dragState.ghost.position);
+          // remove ghost and end drag
+          dragState.ghost.parent?.remove(dragState.ghost);
+          if (dragState.ghost.geometry) dragState.ghost.geometry.dispose();
+          if (dragState.ghost.material) dragState.ghost.material.dispose();
+          dragState.dragging = false;
+          dragState.sourceMesh = null;
+          dragState.ghost = null;
+          dragState.plane = null;
+        }
+      }
+    }
+  });
   renderer.domElement.addEventListener("pointerdown", (event) => {
     updatePointer(event);
     raycaster.setFromCamera(pointer, camera);
-    let hits = raycaster.intersectObjects(powerClickable, false);
+    let hits = raycaster.intersectObjects(powerClickable, true);
     if (hits.length) {
       const { ok, errors } = validateBuild();
       const hudResult = document.getElementById("hud-result");
@@ -610,7 +880,8 @@ function setupPicking() {
       }
       return;
     }
-    hits = raycaster.intersectObjects(placedClickable, false);
+    // Ignore clicks while using grab mechanic; keep existing remove-on-click
+    hits = raycaster.intersectObjects(placedClickable, true);
     if (hits.length) {
       const hit = hits[0].object;
       const { category } = hit.userData || {};
@@ -627,13 +898,21 @@ function setupPicking() {
         return;
       }
     }
-    hits = raycaster.intersectObjects(selectableMeshes, false);
-    if (hits.length) selectPartFromScene(hits[0].object);
+    // Clicking shelf no longer starts drag; use G to grab
   });
+
+  // Mouse up no longer ends drag; releasing G does
 }
 
 spawnParts();
 setupPicking();
+
+// Handle resize for smoother visuals
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
 const btnReset = document.getElementById("btn-reset");
 const hudResult = document.getElementById("hud-result");
@@ -645,9 +924,16 @@ if (btnReset && hudResult) {
       const m = placedMeshes[k];
       if (!m) return;
       m.parent?.remove(m);
-      m.geometry.dispose();
+      // Properly dispose of GLTF models
+      if (m.geometry) m.geometry.dispose();
       if (Array.isArray(m.material)) m.material.forEach((mm) => mm.dispose());
       else if (m.material) m.material.dispose();
+      // Dispose of child meshes if it's a GLTF model
+      m.traverse((node) => {
+        if (node.geometry) node.geometry.dispose();
+        if (Array.isArray(node.material)) node.material.forEach((mm) => mm.dispose());
+        else if (node.material) node.material.dispose();
+      });
       placedMeshes[k] = null;
     });
     placedClickable.splice(0, placedClickable.length);
@@ -713,7 +999,7 @@ createPoster(-ROOM_W / 2 + 0.05, ROOM_H - 2.5, 5, Math.PI / 2, '/static/textures
 
 // 3. Display Table (simple box for now, ideally GLTF)
 const displayTableGeo = new THREE.BoxGeometry(3, 1.0, 1.5);
-const displayTableMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.7 }); // Wooden brown
+const displayTableMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.6 });
 const displayTable = new THREE.Mesh(displayTableGeo, displayTableMat);
 displayTable.position.set(0, 0.5, 2); // More central
 displayTable.castShadow = true;
@@ -746,7 +1032,7 @@ chair.receiveShadow = true;
 scene.add(chair);
 
 const sideTableGeo = new THREE.BoxGeometry(0.7, 0.6, 0.7);
-const sideTableMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.7 }); // Matching wood
+const sideTableMat = new THREE.MeshStandardMaterial({ color: 0xededed, roughness: 0.6 });
 const sideTable = new THREE.Mesh(sideTableGeo, sideTableMat);
 sideTable.position.set(ROOM_W / 2 - 3, 0.3, -ROOM_D / 2 + 2); // Beside the chair
 sideTable.castShadow = true;
