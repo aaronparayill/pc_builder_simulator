@@ -2,13 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>My first three.js app</title>
+    <title>PC Builder Sim</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23007acc'%3E%3Cpath d='M4 6h16v2H4zm0 5h16v6H4zm2 2h12v2H6z'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+      <div class="loading-container">
+        <div class="loading-spinner"></div>
+        <h2>Loading PC Builder...</h2>
+        <div class="loading-progress">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <div class="loading-text" id="loading-text">Initializing...</div>
+        </div>
+      </div>
+    </div>
+
     <div id="hud">
       <div id="hud-actions">
         <button id="btn-reset">Reset Cabinet</button>
+        <button id="btn-audio">🔊 Audio</button>
+        <button id="btn-vr">🥽 VR Mode</button>
+        <button id="btn-pc-power">🖥️ Power PC</button>
+        <button id="btn-room-lights">💡 Room Lights</button>
       </div>
       <div id="hud-result" aria-live="polite"></div>
     </div>
